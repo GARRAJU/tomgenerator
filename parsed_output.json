@@ -1,0 +1,116 @@
+{
+  "model_name": "Rajatemp",
+  "tables": [
+    {
+      "name": "ORDERS",
+      "is_physical": true,
+      "columns": [
+        {
+          "name": "ORDER_ID",
+          "type": "string"
+        },
+        {
+          "name": "CUSTOMER_ID",
+          "type": "string"
+        },
+        {
+          "name": "ORDER_DATE",
+          "type": "string"
+        },
+        {
+          "name": "ORDER_AMOUNT",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "CUSTOMERS",
+      "is_physical": true,
+      "columns": [
+        {
+          "name": "CUSTOMER_ID",
+          "type": "string"
+        },
+        {
+          "name": "CUSTOMER_NAME",
+          "type": "string"
+        },
+        {
+          "name": "CITY",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "FACT",
+      "is_physical": true,
+      "columns": [
+        {
+          "name": "ORDER_ID",
+          "type": "string"
+        },
+        {
+          "name": "CUSTOMER_ID",
+          "type": "string"
+        },
+        {
+          "name": "CUSTOMER_NAME",
+          "type": "string"
+        },
+        {
+          "name": "ORDER_DATE",
+          "type": "string"
+        },
+        {
+          "name": "ORDER_AMOUNT",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "Measures1",
+      "is_physical": false,
+      "columns": [
+        {
+          "name": "DummyColumn",
+          "type": "double",
+          "isHidden": true
+        }
+      ],
+      "measures": [
+        {
+          "name": "Calculation1",
+          "expression": "SUM(FACT[ORDER_AMOUNT])"
+        },
+        {
+          "name": "Calculation2",
+          "expression": "COUNTROWS(ORDERS)"
+        },
+        {
+          "name": "Calculation3",
+          "expression": "COUNTROWS(SUMMARIZE(ORDERS, ORDERS[CUSTOMER_ID]))"
+        },
+        {
+          "name": "Calculation4",
+          "expression": "AVERAGE(FACT[ORDER_AMOUNT])"
+        }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "name": "ORDERS_to_CUSTOMERS",
+      "from_table": "ORDERS",
+      "from_col": "CUSTOMER_ID",
+      "to_table": "CUSTOMERS",
+      "to_col": "CUSTOMER_ID"
+    },
+    {
+      "name": "ORDERS_to_FACT",
+      "from_table": "ORDERS",
+      "from_col": "ORDER_ID",
+      "to_table": "FACT",
+      "to_col": "ORDER_ID"
+    }
+  ]
+}
