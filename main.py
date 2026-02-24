@@ -441,12 +441,12 @@ from dotenv import load_dotenv
 from azure.storage.blob import BlobServiceClient
 
 from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware  # ✅ ADDED
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
 
 # ============================================================
-# CORS CONFIGURATION  ✅ ADDED
+# CORS CONFIGURATION
 # ============================================================
 
 origins = [
@@ -521,9 +521,6 @@ def clean(val: str) -> str:
         return ""
     return re.sub(r'[\[\]"]', "", val).strip()
 
-# ------------------------------------------------------------
-# CLEANING LOGIC (SINGLE SOURCE OF TRUTH)
-# ------------------------------------------------------------
 
 def _clean_table_name(name: str) -> str:
     name = clean(name)
@@ -547,7 +544,7 @@ def _is_default_schema(schema_name: str) -> bool:
     }
 
 # ============================================================
-# EXTRACT (HYPER) HELPERS
+# EXTRACT HELPERS
 # ============================================================
 
 def twbx_has_extract(twbx_path: str) -> bool:
@@ -606,12 +603,9 @@ class TWBXMetadataParser:
     def __init__(self):
         self.client = OpenAI(api_key=OPENAI_API_KEY)
 
-    # (YOUR ENTIRE EXISTING CLASS LOGIC REMAINS EXACTLY SAME)
-    # ❗ NOTHING MODIFIED BELOW
-    # I am keeping it exactly as you wrote.
+    # ---------------- XML METADATA ----------------
 
     def extract_xml_metadata(self, root):
-
         tables = {}
         local_name_map = {}
         xml_to_cleaned_table_map = {}
@@ -651,7 +645,187 @@ class TWBXMetadataParser:
 
         return tables, local_name_map, xml_to_cleaned_table_map
 
-    # ⚠ Remaining methods unchanged (extract_relationships, convert_to_dax, execute)
+    # ---------------- RELATIONSHIPS ----------------
+
+    def extract_relationships(self, root, tables, local_name_map):
+
+        relationships = []
+        seen = set()
+        valid_tables = set(tables.keys())
+
+        relationship_nodes = [
+            el for el in root.findall(".//")
+            if el.tag.endswith("relationship")
+        ]
+
+        for rel in relationship_nodes:
+
+            expr = rel.find("expression")
+            if expr is None:
+                continue
+
+            ops = []
+
+            for sub_expr in expr.iter("expression"):
+                op = sub_expr.get("op")
+                if op and (op.startswith("[") or op in local_name_map):
+                    ops.append(op)
+
+            if len(ops) != 2:
+                continue
+
+            info1 = local_name_map.get(ops[0]) or local_name_map.get(clean(ops[0]))
+            info2 = local_name_map.get(ops[1]) or local_name_map.get(clean(ops[1]))
+
+            if not info1 or not info2:
+                continue
+
+            from_table = info1["table"]
+            to_table = info2["table"]
+
+            if from_table not in valid_tables or to_table not in valid_tables:
+                continue
+
+            if from_table == to_table:
+                continue
+
+            key = (from_table, info1["col"], to_table, info2["col"])
+
+            if key in seen:
+                continue
+
+            seen.add(key)
+
+            relationships.append({
+                "name": f"{from_table}_to_{to_table}",
+                "from_table": from_table,
+                "from_col": info1["col"],
+                "to_table": to_table,
+                "to_col": info2["col"]
+            })
+
+        return relationships
+
+    # ---------------- DAX CONVERSION ----------------
+
+    def convert_to_dax(self, measure_name, tableau_formula, schema_context):
+
+        prompt = f"""
+Convert Tableau calculated field into valid Power BI DAX.
+
+Schema:
+{schema_context}
+
+Rules:
+- Use 'Table'[Column]
+- Use DIVIDE() instead of /
+- Return ONLY DAX
+- Do NOT include MeasureName =
+
+Formula:
+{tableau_formula}
+"""
+
+        response = self.client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}]
+        )
+
+        dax = response.choices[0].message.content.strip()
+        dax = re.sub(r'```.*?\n', '', dax).replace("```", "")
+        dax = re.sub(rf"^{re.escape(measure_name)}\s*=\s*", "", dax)
+
+        return dax.strip()
+
+    # ---------------- MAIN EXECUTION ----------------
+
+    def execute(self, folder_name):
+
+        twbx_path = download_twbx_from_container(folder_name)
+
+        is_extract = twbx_has_extract(twbx_path)
+
+        with tempfile.TemporaryDirectory() as tmp:
+
+            with zipfile.ZipFile(twbx_path, "r") as z:
+                z.extractall(tmp)
+
+            twb = None
+
+            for root_dir, _, files in os.walk(tmp):
+                for f in files:
+                    if f.endswith(".twb"):
+                        twb = os.path.join(root_dir, f)
+
+            if not twb:
+                raise ValueError("No .twb found")
+
+            tree = ET.parse(twb)
+            root = tree.getroot()
+            strip_ns(root)
+
+            xml_tables, local_name_map, _ = self.extract_xml_metadata(root)
+
+            if is_extract:
+                tables = read_hyper_tables(twbx_path)
+            else:
+                tables = xml_tables
+
+            relationships = self.extract_relationships(
+                root, tables, local_name_map
+            )
+
+            measures = []
+
+            schema_context = "\n".join(
+                [f"{t}: {', '.join(cols)}" for t, cols in tables.items()]
+            )
+
+            for col in root.findall(".//column"):
+                calc = col.find("calculation")
+
+                if calc is not None:
+                    formula = calc.get("formula")
+                    name = col.get("caption") or col.get("name")
+
+                    if formula:
+                        dax = self.convert_to_dax(
+                            name, formula, schema_context
+                        )
+
+                        measures.append({
+                            "name": name,
+                            "expression": dax
+                        })
+
+            final_output = {
+                "model_name": "Rajatemp",
+                "tables": [],
+                "relationships": relationships
+            }
+
+            for t, cols in tables.items():
+                final_output["tables"].append({
+                    "name": t,
+                    "is_physical": True,
+                    "columns": [{"name": c, "type": "string"} for c in cols]
+                })
+
+            final_output["tables"].append({
+                "name": "Measures1",
+                "is_physical": False,
+                "columns": [{
+                    "name": "DummyColumn",
+                    "type": "double",
+                    "isHidden": True
+                }],
+                "measures": measures
+            })
+
+            with open("parsed_output.json", "w") as f:
+                json.dump(final_output, f, indent=2)
+
+            return final_output
 
 # ============================================================
 # API ENDPOINT
