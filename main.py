@@ -799,7 +799,7 @@ Formula:
                         })
 
             final_output = {
-                "model_name": "Rajatemp",
+                "model_name": folder_name,  # ✅ UPDATED HERE
                 "tables": [],
                 "relationships": relationships
             }
