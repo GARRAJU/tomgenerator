@@ -20,7 +20,7 @@ app = FastAPI()
 
 origins = [
     "https://id-preview--1115fb10-6ea8-4052-8d1b-31238016c02e.lovable.app",
-    "https://reportmigration-frontend-g9ceape5ddgxa5gq.eastus-01.azurewebsites.net"
+    "https://reportmigration-frontend-g9ceape5ddgxa5gq.eastus-01.azurewebsites.net",
 ]
 
 app.add_middleware(
